@@ -1,0 +1,3 @@
+import Link from "next/link";
+import { AuthForm } from "../../components/auth-form";
+export default function LoginPage() { return <main className="auth-shell"><Link className="brand auth-brand" href="/">kloud<span>lab</span></Link><div className="auth-layout"><div className="auth-aside"><div className="eyebrow">Welcome back</div><h1>Keep building<br /><em>great things.</em></h1><p>Your next cloud skill is only one session away.</p></div><div className="auth-card"><div className="eyebrow">Log in</div><h2>Welcome back.</h2><p>Enter your details to continue learning.</p><AuthForm mode="login" /></div></div></main> }

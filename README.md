@@ -1,22 +1,47 @@
 # KloudLab.in
 
-Cloud engineering and consulting platform MVP covering AWS, Terraform, Kubernetes, and Rust. The frontend is a Vite/React/TypeScript app with the existing KloudLab dark/lime theme; the API is Rust/Axum; Terraform describes the deliberately small AWS baseline.
+KloudLab is a cloud engineering and consulting site with a public, unsaved architecture playground. Visitors can add and arrange AWS, GCP, Azure, Oracle Cloud, Kubernetes, IaC, CI/CD and observability components; canvas changes are temporary and are not saved. Terraform and Rust remain service offerings, not deployment requirements for this website.
 
-## Run locally
+## Local development
+
+Run the Rust API:
 
 ```bash
 cargo run -p kloudlab-api
-cd apps/web && npm install && npm run dev
 ```
 
-The API listens on `http://localhost:8080`; the web app listens on `http://localhost:3000`. Copy `.env.example` to `.env` as needed. `WEB_ORIGIN` must match the browser origin so credentialed account requests work. `docker compose up --build` starts the API and DynamoDB Local. Account, saved-design, template, and inquiry records are currently held in memory and reset when the API restarts; DynamoDB persistence remains a follow-up before production use.
+In another terminal, run the frontend:
 
-## Product routes
+```bash
+cd apps/web
+npm ci
+npm run dev
+```
 
-`/` home, `/services`, `/work`, `/playground`, `/about`, `/contact`, and `/login`. The Playground opens with a connected sample website architecture and provides AWS, GCP, Azure, Oracle Cloud Infrastructure, Terraform, AWS CDK, Kubernetes, CI/CD, and observability components; cross-cloud designs can be mixed freely. Drag a node to move it, drag or tap between circular ports to create directional connections, and remove connections from the canvas or the live connection list. Rust is offered as a separate engineering service and is not a Playground component. Visitors can experiment with temporary local edits; accounts unlock saved designs and reusable templates. The former `/workspace` URL remains available as a legacy alias.
+The website runs at `http://localhost:3000` and the API at `http://localhost:8080`. The contact form posts to `POST /api/v1/inquiries`; `GET /health` is available for health checks. Set `VITE_API_URL` when building the frontend for a non-local API URL. `WEB_ORIGIN` configures API CORS.
 
-## API flow
+The API currently keeps inquiries in process memory. They are lost when the API restarts, so configure durable storage before relying on this endpoint in production.
 
-The contact form posts JSON to `POST /api/v1/inquiries` and returns a receipt id. Accounts use `POST /api/v1/auth/register` and `/api/v1/auth/login`; authenticated design management uses `GET` and `POST /api/v1/designs`. `GET /health` is available for container health checks. Errors use `{ error: { code, message, request_id } }`.
+## Docker
 
-See [infra/terraform/README.md](infra/terraform/README.md) for the AWS baseline and engineering capabilities and [docs/architecture.md](docs/architecture.md) for the domain boundaries.
+Build and start the API with:
+
+```bash
+docker compose up --build api
+```
+
+Build the web image separately and point it at the deployed API:
+
+```bash
+docker build --build-arg VITE_API_URL=https://api.example.com -f apps/web/Dockerfile .
+```
+
+The API image uses `apps/api/Dockerfile`. No cloud resources are created by this repository.
+
+## Project layout
+
+- `apps/web` — React, TypeScript and Vite frontend
+- `apps/api` — Rust and Axum health/contact API
+- `docker-compose.yml` — local API container
+
+The interactive canvas is a frontend-only tool. It does not require accounts, a database, or infrastructure provisioning to run.

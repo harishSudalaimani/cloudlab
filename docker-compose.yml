@@ -1,24 +1,10 @@
 services:
-  dynamodb-local:
-    image: amazon/dynamodb-local:latest
-    command: -jar DynamoDBLocal.jar -sharedDb -inMemory
-    ports:
-      - "8000:8000"
   api:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
-    working_dir: /workspace
-    volumes:
-      - .:/workspace
-      - cargo-cache:/usr/local/cargo/registry
     environment:
       API_ADDR: 0.0.0.0:8080
       WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:3000}
-      DYNAMODB_ENDPOINT: http://dynamodb-local:8000
     ports:
       - "8080:8080"
-    depends_on:
-      - dynamodb-local
-volumes:
-  cargo-cache:

@@ -1,45 +1,86 @@
 use std::sync::Arc;
-use axum::{extract::{Path, State}, http::{HeaderMap, StatusCode}, response::IntoResponse, routing::{get, post}, Json, Router};
-use axum_extra::extract::cookie::{Cookie, SameSite};
-use chrono::Utc;
+
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    routing::{get, post},
+    Json, Router,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use argon2::{Argon2, PasswordHash, PasswordVerifier};
-use crate::{app::{active_entitlement, AppState}, domain::{self, Entitlement, Inquiry, LabSession, Order, SessionStatus, TaskAttempt}, providers::{ProvisionRequest, ValidationInput}};
 
-pub fn router(state: Arc<AppState>) -> Router { Router::new().route("/health", get(health)).route("/api/v1/inquiries", post(create_inquiry)).route("/api/v1/auth/login", post(login)).route("/api/v1/auth/logout", post(logout)).route("/api/v1/me", get(me)).route("/api/v1/labs", get(labs)).route("/api/v1/labs/{slug}", get(lab)).route("/api/v1/labs/{id}/start", post(start_lab)).route("/api/v1/lab-sessions/{id}", get(session)).route("/api/v1/lab-sessions/{id}/progress", get(progress)).route("/api/v1/lab-sessions/{id}/tasks/{task_id}/validate", post(validate)).route("/api/v1/me/entitlements", get(entitlements)).route("/api/v1/me/progress", get(my_progress)).route("/api/v1/payments/orders", post(create_order)).route("/api/v1/payments/verify", post(verify_payment)).with_state(state) }
+use crate::{app::AppState, domain::Inquiry};
 
-async fn health() -> impl IntoResponse { Json(serde_json::json!({"status":"ok"})) }
-#[derive(Deserialize)] struct InquiryInput { name: String, email: String, message: String }
-async fn create_inquiry(State(state): State<Arc<AppState>>, Json(input): Json<InquiryInput>) -> Result<impl IntoResponse, ApiError> {
-    if input.name.trim().is_empty() || !input.email.contains('@') || input.message.trim().is_empty() { return Err(ApiError::bad_request("INVALID_INQUIRY", "Name, email, and message are required.")); }
-    let inquiry = Inquiry { id: Uuid::new_v4(), name: input.name.trim().into(), email: input.email.trim().to_lowercase(), message: input.message.trim().into(), created_at: Utc::now() };
-    state.store.write().await.inquiries.push(inquiry.clone());
-    Ok((StatusCode::CREATED, Json(serde_json::json!({"id": inquiry.id, "status":"received"}))))
+pub fn router(state: Arc<AppState>) -> Router {
+    Router::new()
+        .route("/health", get(health))
+        .route("/api/v1/inquiries", post(create_inquiry))
+        .with_state(state)
 }
-#[derive(Deserialize)] struct Credentials { email: String, password: String }
-#[derive(Serialize)] struct PublicUser { id: Uuid, email: String }
-fn public(u: &crate::domain::User) -> PublicUser { PublicUser { id: u.id, email: u.email.clone() } }
-fn cookie(id: Uuid) -> Cookie<'static> { let mut c = Cookie::new("kloudlab_session", id.to_string()); c.set_http_only(true); c.set_same_site(SameSite::Lax); c.set_path("/"); c }
-fn user_id(headers: &HeaderMap) -> Result<Uuid, ApiError> { headers.get("cookie").and_then(|v| v.to_str().ok()).and_then(|raw| raw.split(';').find_map(|part| part.trim().strip_prefix("kloudlab_session=")).and_then(|v| Uuid::parse_str(v).ok())).ok_or_else(|| ApiError::unauthorized("AUTH_REQUIRED", "Authentication is required.")) }
-async fn login(State(state): State<Arc<AppState>>, Json(input): Json<Credentials>) -> Result<impl IntoResponse, ApiError> { let store = state.store.read().await; let user = store.users.values().find(|u| u.email == input.email.to_lowercase()).ok_or_else(|| ApiError::unauthorized("INVALID_CREDENTIALS", "Invalid email or password."))?; let parsed = PasswordHash::new(&user.password_hash).map_err(|_| ApiError::internal())?; Argon2::default().verify_password(input.password.as_bytes(), &parsed).map_err(|_| ApiError::unauthorized("INVALID_CREDENTIALS", "Invalid email or password."))?; let mut headers = HeaderMap::new(); headers.append("set-cookie", cookie(user.id).to_string().parse().unwrap()); Ok((headers, Json(serde_json::json!({"user": public(user)})))) }
-async fn logout() -> impl IntoResponse { let mut c = cookie(Uuid::nil()); c.make_removal(); let mut h = HeaderMap::new(); h.append("set-cookie", c.to_string().parse().unwrap()); (h, Json(serde_json::json!({"ok":true}))) }
-async fn me(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Result<impl IntoResponse, ApiError> { let id = user_id(&headers)?; let store = state.store.read().await; let user = store.users.get(&id).ok_or_else(|| ApiError::unauthorized("AUTH_REQUIRED", "Authentication is required."))?; Ok(Json(serde_json::json!({"user": public(user)}))) }
-async fn labs(State(state): State<Arc<AppState>>) -> impl IntoResponse { Json(state.store.read().await.labs.clone()) }
-async fn lab(State(state): State<Arc<AppState>>, Path(slug): Path<String>) -> Result<impl IntoResponse, ApiError> { let store = state.store.read().await; Ok(Json(store.labs.iter().find(|l| l.slug == slug).cloned().ok_or_else(|| ApiError::not_found("LAB_NOT_FOUND", "Lab not found."))?)) }
-async fn start_lab(State(state): State<Arc<AppState>>, headers: HeaderMap, Path(id): Path<String>) -> Result<impl IntoResponse, ApiError> { let uid = user_id(&headers)?; let now = Utc::now(); let (lab, sid) = { let mut store = state.store.write().await; let lab = store.labs.iter().find(|l| l.id == id).cloned().ok_or_else(|| ApiError::not_found("LAB_NOT_FOUND", "Lab not found."))?; if !active_entitlement(&store, uid, &id) { return Err(ApiError::forbidden("ENTITLEMENT_REQUIRED", "Purchase access before starting this lab.")); } let sid = Uuid::new_v4(); let session = LabSession { id: sid, user_id: uid, lab_id: lab.id.clone(), provider: lab.provider.clone(), environment_id: None, status: SessionStatus::Provisioning, started_at: now, expires_at: domain::session_expiry(now), completed_at: None, score: 0 }; store.sessions.insert(sid, session); (lab, sid) }; let env = state.environment.provision(ProvisionRequest { session_id: sid.to_string(), lab_id: lab.id.clone(), provider: lab.provider.clone() }).await.map_err(|_| ApiError::provider())?; let mut store = state.store.write().await; let session = store.sessions.get_mut(&sid).unwrap(); session.environment_id = Some(env.id); session.status = SessionStatus::Running; Ok((StatusCode::CREATED, Json(session.clone()))) }
-async fn session(State(state): State<Arc<AppState>>, headers: HeaderMap, Path(id): Path<Uuid>) -> Result<impl IntoResponse, ApiError> { let uid = user_id(&headers)?; let mut store = state.store.write().await; let (lab_id, expired) = { let s = store.sessions.get(&id).ok_or_else(|| ApiError::not_found("SESSION_NOT_FOUND", "Lab session not found."))?; if s.user_id != uid { return Err(ApiError::forbidden("FORBIDDEN", "You do not own this session.")); } (s.lab_id.clone(), s.expired(Utc::now())) }; if expired { store.sessions.get_mut(&id).unwrap().expire(); return Err(ApiError::gone("LAB_SESSION_EXPIRED", "The lab session has expired.")); } let lab = store.labs.iter().find(|l| l.id == lab_id).cloned().unwrap(); let attempts: Vec<_> = store.attempts.iter().filter(|a| a.session_id == id).cloned().collect(); let s = store.sessions.get(&id).unwrap().clone(); Ok(Json(serde_json::json!({"session":s,"lab":lab,"attempts":attempts}))) }
-async fn progress(State(state): State<Arc<AppState>>, headers: HeaderMap, Path(id): Path<Uuid>) -> Result<impl IntoResponse, ApiError> { let uid = user_id(&headers)?; let store = state.store.read().await; let s = store.sessions.get(&id).ok_or_else(|| ApiError::not_found("SESSION_NOT_FOUND", "Lab session not found."))?; if s.user_id != uid { return Err(ApiError::forbidden("FORBIDDEN", "You do not own this session.")); } Ok(Json(serde_json::json!({"score":s.score,"attempts":store.attempts.iter().filter(|a| a.session_id == id).collect::<Vec<_>>()}))) }
-async fn validate(State(state): State<Arc<AppState>>, headers: HeaderMap, Path((id, task_id)): Path<(Uuid, String)>) -> Result<impl IntoResponse, ApiError> { let uid = user_id(&headers)?; let (environment_id, task, lab) = { let mut store = state.store.write().await; let lab_id = { let s = store.sessions.get(&id).ok_or_else(|| ApiError::not_found("SESSION_NOT_FOUND", "Lab session not found."))?; if s.user_id != uid { return Err(ApiError::forbidden("FORBIDDEN", "You do not own this session.")); } if s.expired(Utc::now()) { store.sessions.get_mut(&id).unwrap().expire(); return Err(ApiError::gone("LAB_SESSION_EXPIRED", "The lab session has expired.")); } s.lab_id.clone() }; let lab = store.labs.iter().find(|l| l.id == lab_id).cloned().unwrap(); let task = lab.tasks.iter().find(|t| t.id == task_id).cloned().ok_or_else(|| ApiError::not_found("TASK_NOT_FOUND", "Task not found."))?; store.sessions.get_mut(&id).unwrap().status = SessionStatus::Validating; (store.sessions.get(&id).unwrap().environment_id.clone().unwrap_or_default(), task, lab) }; let result = state.validator.validate(ValidationInput { environment_id: &environment_id, task: &task }).await.map_err(|_| ApiError::provider())?; let mut store = state.store.write().await; let points = if result.passed { task.points } else { 0 }; let already = store.attempts.iter().any(|a| a.session_id == id && a.task_id == task.id && a.passed); let attempt = TaskAttempt { session_id: id, task_id: task.id.clone(), passed: result.passed, points_awarded: if already { 0 } else { points }, message: result.message, created_at: Utc::now() }; store.attempts.push(attempt.clone()); let s = store.sessions.get_mut(&id).unwrap(); if !already { s.score = (s.score + points).min(100); } s.status = if s.score >= lab.tasks.iter().map(|t| t.points).sum() { SessionStatus::Completed } else { SessionStatus::Running }; if matches!(s.status, SessionStatus::Completed) { s.completed_at = Some(Utc::now()); } Ok(Json(serde_json::json!({"status": if result.passed {"PASSED"} else {"FAILED"}, "points_awarded":points, "message":attempt.message, "score":s.score}))) }
-async fn entitlements(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Result<impl IntoResponse, ApiError> { let uid = user_id(&headers)?; Ok(Json(state.store.read().await.entitlements.iter().filter(|e| e.user_id == uid).cloned().collect::<Vec<_>>())) }
-async fn my_progress(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Result<impl IntoResponse, ApiError> { let uid = user_id(&headers)?; Ok(Json(state.store.read().await.sessions.values().filter(|s| s.user_id == uid).cloned().collect::<Vec<_>>())) }
-#[derive(Deserialize)] struct OrderInput { lab_id: String }
-async fn create_order(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(input): Json<OrderInput>) -> Result<impl IntoResponse, ApiError> { let uid = user_id(&headers)?; let mut store = state.store.write().await; let lab = store.labs.iter().find(|l| l.id == input.lab_id).cloned().ok_or_else(|| ApiError::not_found("LAB_NOT_FOUND", "Lab not found."))?; let order = Order { id:Uuid::new_v4(), user_id:uid, lab_id:lab.id, amount_minor:lab.price_minor, currency:lab.currency, status:"CREATED".into(), provider_order_id:String::new() }; let provider_order_id = state.payments.create_order(&order.id.to_string()).await.map_err(|_| ApiError::provider())?; let mut order = order; order.provider_order_id = provider_order_id; store.orders.insert(order.id, order.clone()); Ok((StatusCode::CREATED, Json(order))) }
-#[derive(Deserialize)] struct VerifyInput { order_id: Uuid }
-async fn verify_payment(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(input): Json<VerifyInput>) -> Result<impl IntoResponse, ApiError> { let uid = user_id(&headers)?; let mut store = state.store.write().await; let (provider_order_id, lab_id) = { let order = store.orders.get(&input.order_id).ok_or_else(|| ApiError::not_found("ORDER_NOT_FOUND", "Order not found."))?; if order.user_id != uid { return Err(ApiError::forbidden("FORBIDDEN", "You do not own this order.")); } if order.status == "PAID" { return Ok(Json(serde_json::json!({"status":"PAID"}))); } (order.provider_order_id.clone(), order.lab_id.clone()) }; let ok = state.payments.verify_payment(&provider_order_id).await.map_err(|_| ApiError::provider())?; if !ok { store.orders.get_mut(&input.order_id).unwrap().status = "FAILED".into(); return Err(ApiError::bad_request("PAYMENT_FAILED", "Payment verification failed.")); } store.orders.get_mut(&input.order_id).unwrap().status = "PAID".into(); let now = Utc::now(); store.entitlements.push(Entitlement { id:Uuid::new_v4(), user_id:uid, lab_id, starts_at:now, expires_at:now + chrono::Duration::days(30) }); Ok(Json(serde_json::json!({"status":"PAID","entitlement_created":true}))) }
 
-#[derive(Serialize)] struct ErrorBody { error: ErrorDetail }
-#[derive(Serialize)] struct ErrorDetail { code: &'static str, message: &'static str, request_id: String }
-struct ApiError { status: StatusCode, code: &'static str, message: &'static str }
-impl ApiError { fn new(s:StatusCode,c:&'static str,m:&'static str)->Self{Self{status:s,code:c,message:m}} fn unauthorized(c:&'static str,m:&'static str)->Self{Self::new(StatusCode::UNAUTHORIZED,c,m)} fn bad_request(c:&'static str,m:&'static str)->Self{Self::new(StatusCode::BAD_REQUEST,c,m)} fn forbidden(c:&'static str,m:&'static str)->Self{Self::new(StatusCode::FORBIDDEN,c,m)} fn not_found(c:&'static str,m:&'static str)->Self{Self::new(StatusCode::NOT_FOUND,c,m)} fn gone(c:&'static str,m:&'static str)->Self{Self::new(StatusCode::GONE,c,m)} fn provider()->Self{Self::new(StatusCode::BAD_GATEWAY,"PROVIDER_ERROR","The provider operation failed.")} fn internal()->Self{Self::new(StatusCode::INTERNAL_SERVER_ERROR,"INTERNAL_ERROR","An internal error occurred.")} }
-impl IntoResponse for ApiError { fn into_response(self)->axum::response::Response { (self.status, Json(ErrorBody{error:ErrorDetail{code:self.code,message:self.message,request_id:format!("req_{}",Uuid::new_v4())}})).into_response() } }
+async fn health() -> impl IntoResponse {
+    Json(serde_json::json!({ "status": "ok" }))
+}
+
+#[derive(Deserialize)]
+struct InquiryInput {
+    name: String,
+    email: String,
+    message: String,
+}
+
+async fn create_inquiry(
+    State(state): State<Arc<AppState>>,
+    Json(input): Json<InquiryInput>,
+) -> Result<impl IntoResponse, ApiError> {
+    let inquiry = Inquiry::new(&input.name, &input.email, &input.message)
+        .map_err(ApiError::invalid_inquiry)?;
+    let id = inquiry.id;
+    state.inquiries.write().await.push(inquiry);
+    Ok((StatusCode::CREATED, Json(serde_json::json!({ "id": id, "status": "received" }))))
+}
+
+#[derive(Serialize)]
+struct ErrorBody {
+    error: ErrorDetail,
+}
+
+#[derive(Serialize)]
+struct ErrorDetail {
+    code: &'static str,
+    message: &'static str,
+    request_id: String,
+}
+
+struct ApiError {
+    status: StatusCode,
+    code: &'static str,
+    message: &'static str,
+}
+
+impl ApiError {
+    fn invalid_inquiry(message: &'static str) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            code: "INVALID_INQUIRY",
+            message,
+        }
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        (
+            self.status,
+            Json(ErrorBody {
+                error: ErrorDetail {
+                    code: self.code,
+                    message: self.message,
+                    request_id: format!("req_{}", Uuid::new_v4()),
+                },
+            }),
+        )
+            .into_response()
+    }
+}

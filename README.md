@@ -1,6 +1,6 @@
-# KloudLab
+# KloudLab.in
 
-Production-oriented cloud laboratory platform MVP. The first vertical slice is runnable locally with a Rust/Axum API, Next.js frontend, mock payment, mock environment, mock validation, 45-minute server-owned sessions, scoring, and DynamoDB Local available through Docker Compose.
+AWS-focused cloud architecture and consulting platform MVP. The frontend is a Vite/React/TypeScript app with the existing KloudLab dark/lime theme; the API is Rust/Axum; Terraform describes the deliberately small AWS baseline.
 
 ## Run locally
 
@@ -9,10 +9,14 @@ cargo run -p kloudlab-api
 cd apps/web && npm install && npm run dev
 ```
 
-The API listens on `http://localhost:8080`; the web app listens on `http://localhost:3000`. Copy `.env.example` to `.env` as needed. `docker compose up dynamodb-local` starts the local database service; the current MVP repository defaults to memory so the vertical slice does not require it.
+The API listens on `http://localhost:8080`; the web app listens on `http://localhost:3000`. Copy `.env.example` to `.env` as needed. `docker compose up --build` starts the API and DynamoDB Local. Inquiry persistence is currently in-memory in the MVP; the Terraform baseline provisions the DynamoDB table and the next adapter can switch the repository to the AWS SDK without changing the HTTP contract.
+
+## Product routes
+
+`/` home, `/services`, `/work`, `/workspace`, `/about`, and `/contact`.
 
 ## API flow
 
-Register/login with an email and password of at least eight characters, list labs, create and verify a mock order, start a lab, then validate tasks through `/api/v1/lab-sessions/:id/tasks/:task_id/validate`. Errors use `{ error: { code, message, request_id } }`.
+The contact form posts JSON to `POST /api/v1/inquiries` and returns a receipt id. `GET /health` is available for container health checks. Errors use `{ error: { code, message, request_id } }`.
 
-See [docs/architecture.md](docs/architecture.md) for the domain boundaries, access-pattern-driven DynamoDB design, and provider migration plan.
+See [infra/terraform/README.md](infra/terraform/README.md) for the AWS baseline and [docs/architecture.md](docs/architecture.md) for the domain boundaries.

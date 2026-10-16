@@ -7,11 +7,18 @@ use uuid::Uuid;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use argon2::password_hash::SaltString;
 use rand_core::OsRng;
-use crate::{app::{active_entitlement, AppState}, domain::{self, Entitlement, LabSession, Order, SessionStatus, TaskAttempt}, providers::{ProvisionRequest, ValidationInput}};
+use crate::{app::{active_entitlement, AppState}, domain::{self, Entitlement, Inquiry, LabSession, Order, SessionStatus, TaskAttempt}, providers::{ProvisionRequest, ValidationInput}};
 
-pub fn router(state: Arc<AppState>) -> Router { Router::new().route("/health", get(health)).route("/api/v1/auth/register", post(register)).route("/api/v1/auth/login", post(login)).route("/api/v1/auth/logout", post(logout)).route("/api/v1/me", get(me)).route("/api/v1/labs", get(labs)).route("/api/v1/labs/{slug}", get(lab)).route("/api/v1/labs/{id}/start", post(start_lab)).route("/api/v1/lab-sessions/{id}", get(session)).route("/api/v1/lab-sessions/{id}/progress", get(progress)).route("/api/v1/lab-sessions/{id}/tasks/{task_id}/validate", post(validate)).route("/api/v1/me/entitlements", get(entitlements)).route("/api/v1/me/progress", get(my_progress)).route("/api/v1/payments/orders", post(create_order)).route("/api/v1/payments/verify", post(verify_payment)).with_state(state) }
+pub fn router(state: Arc<AppState>) -> Router { Router::new().route("/health", get(health)).route("/api/v1/inquiries", post(create_inquiry)).route("/api/v1/auth/register", post(register)).route("/api/v1/auth/login", post(login)).route("/api/v1/auth/logout", post(logout)).route("/api/v1/me", get(me)).route("/api/v1/labs", get(labs)).route("/api/v1/labs/{slug}", get(lab)).route("/api/v1/labs/{id}/start", post(start_lab)).route("/api/v1/lab-sessions/{id}", get(session)).route("/api/v1/lab-sessions/{id}/progress", get(progress)).route("/api/v1/lab-sessions/{id}/tasks/{task_id}/validate", post(validate)).route("/api/v1/me/entitlements", get(entitlements)).route("/api/v1/me/progress", get(my_progress)).route("/api/v1/payments/orders", post(create_order)).route("/api/v1/payments/verify", post(verify_payment)).with_state(state) }
 
 async fn health() -> impl IntoResponse { Json(serde_json::json!({"status":"ok"})) }
+#[derive(Deserialize)] struct InquiryInput { name: String, email: String, message: String }
+async fn create_inquiry(State(state): State<Arc<AppState>>, Json(input): Json<InquiryInput>) -> Result<impl IntoResponse, ApiError> {
+    if input.name.trim().is_empty() || !input.email.contains('@') || input.message.trim().is_empty() { return Err(ApiError::bad_request("INVALID_INQUIRY", "Name, email, and message are required.")); }
+    let inquiry = Inquiry { id: Uuid::new_v4(), name: input.name.trim().into(), email: input.email.trim().to_lowercase(), message: input.message.trim().into(), created_at: Utc::now() };
+    state.store.write().await.inquiries.push(inquiry.clone());
+    Ok((StatusCode::CREATED, Json(serde_json::json!({"id": inquiry.id, "status":"received"}))))
+}
 #[derive(Deserialize)] struct Credentials { email: String, password: String }
 #[derive(Serialize)] struct PublicUser { id: Uuid, email: String }
 fn public(u: &crate::domain::User) -> PublicUser { PublicUser { id: u.id, email: u.email.clone() } }

@@ -1,8 +1,0 @@
-"use client";
-import { useState } from "react";
-const base = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
-export function LabAccessButton({ labId }: { labId: string }) {
-  const [busy, setBusy] = useState(false); const [error, setError] = useState("");
-  async function start() { setBusy(true); setError(""); try { const me = await fetch(`${base}/api/v1/me`, { credentials: "include" }); if (me.status === 401) { window.location.href = "/login"; return; } const orderResponse = await fetch(`${base}/api/v1/payments/orders`, { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ lab_id: labId }) }); const order = await orderResponse.json(); if (!orderResponse.ok) throw new Error(order?.error?.message ?? "Could not create access order."); const verify = await fetch(`${base}/api/v1/payments/verify`, { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ order_id: order.id }) }); if (!verify.ok) throw new Error("Payment verification failed."); const launch = await fetch(`${base}/api/v1/labs/${labId}/start`, { method: "POST", credentials: "include" }); const session = await launch.json(); if (!launch.ok) throw new Error(session?.error?.message ?? "Could not start the lab."); window.location.href = `/lab/${session.id}`; } catch (e) { setError(e instanceof Error ? e.message : "Unable to start lab."); setBusy(false); } }
-  return <><button className="button full" onClick={start} disabled={busy}>{busy ? "Preparing your lab…" : <>Get access & start <span>↗</span></>}</button>{error && <small className="form-error access-error">{error}</small>}</>;
-}

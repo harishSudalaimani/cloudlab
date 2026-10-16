@@ -37,6 +37,9 @@ pub struct TaskAttempt { pub session_id: Uuid, pub task_id: String, pub passed: 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Order { pub id: Uuid, pub user_id: Uuid, pub lab_id: String, pub amount_minor: u32, pub currency: String, pub status: String, pub provider_order_id: String }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Inquiry { pub id: Uuid, pub name: String, pub email: String, pub message: String, pub created_at: DateTime<Utc> }
+
 pub fn lab_definitions() -> Vec<Lab> {
     vec![
         lab("aws-s3-101", "s3-fundamentals", "AWS S3 Fundamentals", "Learn the fundamentals of object storage with a safe simulated AWS environment.", vec!["Create and configure an S3 bucket", "Understand versioning and lifecycle controls", "Practice validating cloud infrastructure"], vec![("create-bucket", "Create an S3 bucket", ValidatorKind::MockBucketExists), ("enable-versioning", "Enable bucket versioning", ValidatorKind::MockVersioningEnabled), ("upload-object", "Upload an object", ValidatorKind::MockObjectExists), ("lifecycle", "Configure lifecycle management", ValidatorKind::MockLifecycleEnabled)]),

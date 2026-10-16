@@ -5,12 +5,13 @@ services:
     ports:
       - "8000:8000"
   api:
-    image: rust:1.98
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
     working_dir: /workspace
     volumes:
       - .:/workspace
       - cargo-cache:/usr/local/cargo/registry
-    command: cargo run -p kloudlab-api
     environment:
       API_ADDR: 0.0.0.0:8080
       DYNAMODB_ENDPOINT: http://dynamodb-local:8000

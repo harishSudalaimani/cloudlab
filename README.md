@@ -1,20 +1,19 @@
 # KloudLab.in
 
-Cloud engineering and consulting, with an interactive architecture playground.
+Cloud engineering and consulting with an interactive architecture playground and client-meeting booking.
 
 ## What’s inside
 
 - **Playground:** Explore and arrange cloud, Kubernetes, infrastructure-as-code, CI/CD and observability tools.
 - **Services:** Cloud architecture, AWS, Kubernetes, Terraform, observability, cost optimization and Rust consulting.
-- **Contact:** Inquiry form backed by a small Rust API.
+- **Meetings:** Book a client meeting through Calendly.
 
 ## Built with
 
-React · TypeScript · Vite · Tailwind CSS · Rust · Axum
+React · TypeScript · Vite · Tailwind CSS
 
 ## Project structure
 
 - `apps/web` — Website and playground
-- `apps/api` — Health and contact inquiry API
 
-Playground designs are temporary and are not saved. The API currently keeps inquiries in memory.
+Playground designs are temporary and are not saved.
